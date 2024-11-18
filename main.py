@@ -277,11 +277,6 @@ def sub_topic_selection(user_info, sub_topics_response, user_response, main_topi
 
 def organizer_by_state(state=0):
 
-    ## ORIGINAL INPUT START
-    #
-    #
-    ## ORIGINAL INPUT END
-
     if state == 0:
         state_machine = {
             "state": 0,
@@ -292,7 +287,9 @@ def organizer_by_state(state=0):
             "main_topics": None,
             "main_topic": None,
             "sub_topics": None,
-            "sub_topic": None
+            "sub_topic": None,
+            "learning_objectives": {},
+            "teachings": {}
         }
 
         intention_history = None
@@ -525,7 +522,6 @@ def organizer_by_state(state=0):
             sub_topics_response += "\nWhich sub topic would you like to study?"
             print(sub_topics_response)
             user_response = input()
-            # user_response = "I don't have any idea on this topic, so I want to start from the beginning"
             intention_history.append({
                 "role": "assistant",
                 "content": [
@@ -649,8 +645,144 @@ def organizer_by_state(state=0):
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_5.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
-
             print('sub topic you selected is:', state_machine['sub_topic'])
+
+            learning_objectives = None
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
+            if "learning_objectives" in state_machine:
+                if heading in state_machine['learning_objectives']:
+                    learning_objectives = state_machine['learning_objectives'][heading]
+            else:
+                state_machine['learning_objectives'] = {}
+
+            if learning_objectives is None:
+                state_machine['learning_objectives'][heading] = learning_objectives_definition(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'])
+
+            state_machine['state'] = 6
+
+        elif state_machine['state'] == 6:
+            with open("state_machine_6.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_6.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+
+            if "teachings" not in state_machine:
+                state_machine['teachings'] = {}
+
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
+
+            if heading in state_machine['teachings']:
+                teaching = state_machine['teachings'][heading]
+            else:
+                teaching = None
+
+            for learning_objective in state_machine['learning_objectives'][heading]:
+                if learning_objective['state'] == "not_known":
+                    objective = learning_objective['objective']
+                    print(f"Current objective is:\n{objective}")
+
+                    teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching)
+                    state_machine['teachings'][heading] = teaching
+                    print("-------")
+                    print(teaching[-1]['content'][0]['text'])
+                    print("-------")
+                    learning_objective['state'] = "taught"
+                    state_machine['state'] = 7
+                    break
+
+            state_machine['state'] = 7
+
+        elif state_machine['state'] == 7:
+            with open("state_machine_7.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_7.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+
+            print("Will be implemented soon!!!!")
+            # TODO user intentioni algilanacak ama kurs icin farkli bir intention detection yazilabilir
+            # TODO daha sonrasinda question varsa cevaplanacak, yoksa state 6 ile devam edilecek
+            return
+
+
+def teach_learning_objective(user_info, sub_topic, main_topic, learning_objective, teaching):
+    if teaching is None:
+        user_prompt = f"Hello, my name is {user_info['name']}. Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Describe it in English!"
+
+        teaching = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_prompt
+                    }
+                ]
+            }
+        ]
+
+    else:
+        user_prompt = f"Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Describe it in English!"
+
+        teaching.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": user_prompt
+                }
+            ]
+        })
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']} for foreign students, you speak English. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. Do not ask any question to the student!",
+        messages=teaching
+    )
+
+    teacher_text = message.content[0].text
+    teacher_text += "\nDo you have any question or do you want me to continue?"
+    teaching.append({
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": teacher_text
+            }
+        ]
+    })
+
+    return teaching
+
+
+def learning_objectives_definition(user_info, sub_topic, main_topic):
+    user_prompt = f"Define the core learning objectives of the {sub_topic} topic. The learning objective should only be correlated with the {sub_topic} topic but not coincide with others. List each related objective in between <objective> tags."
+
+    message = client.messages.create(
+        model = model,
+        max_tokens = 1000,
+        temperature = 0,
+        system = f"You are a professor who teaches elementary {user_info['language']}, you speak English. Today's topic is {sub_topic} on the {main_topic} chapter.",
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_prompt
+                    }
+                ]
+            }
+        ]
+    )
+
+    objectives = []
+    for objective in re.findall(r"<objective>.*</objective>", message.content[0].text):
+        objectives.append({"objective": objective[11:-12], "state": "not_known"})
+
+    return objectives
+
 
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz"]
@@ -667,6 +799,7 @@ if __name__ == '__main__':
         print("No API key found. Please provide an API key or create an api_key.txt file in the same directory.")
     else:
         model = "claude-3-haiku-20240307"
+        # model = "claude-3-5-haiku-20241022"
         # model = "claude-3-5-sonnet-latest"
         intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz"]
         # TODO: change user info intention
