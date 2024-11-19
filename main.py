@@ -83,24 +83,60 @@ def greeting():
     return intention_history, user_info
 
 
-def detect_user_intention(intention_history):
+def relevant_check(history):
+
+    if not relevant_check_enabled:
+        return True
 
     tool_definition = {
+        "name": "language_lecture_planner",
+        "description": "The user is in a language teaching portal. The language lecture planner takes the is_relevant parameter and arranges the next step accordingly. is_relevant"
+                       "parameter describes whether the user's response is directly connected and related to the language lecture content or not. If the user wants to learn something, but if "
+                       "it is not connected to the previously mentioned topics, the is_relevant parameter should be False. But, if the user asks or makes a comment about something that is"
+                       "strictly connected to the language lecture, then the is_relevant parameter should be True.\n"
+                       "Even if the user response is somehow correlated with the language learning lecture, but if it is not a completely fit to the context, then the is_relevant"
+                       " parameter should be False. The cohesion is the key point.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "is_relevant": {
+                    "type": "boolean",
+                    "description": "Is the user's response is directly relevant to the course content?"
+                }
+            },
+            "required": ["is_relevant"]
+        }
+    }
+    message = client.messages.create(
+        model = model,
+        max_tokens = 1000,
+        temperature = 0,
+        messages = history,
+        tools = [tool_definition],
+        tool_choice= {"type": "tool", "name": "language_lecture_planner"}
+    )
+
+    return message.content[0].input['is_relevant']
+
+
+def detect_user_intention(intention_history):
+    tool_definition = {
         "name": "intention_detector",
-        "description": "Retrieve's the intention of the user which uses a portal to learn a language. The intention is one of <proceed>, <quit>, <go_to_main_topics>, <go_to_sub_topics>, <exit_quiz>, <exit_lesson>, <proceed_to_quiz>.\n"
+        "description": "Retrieve's the intention of the user which uses a portal to learn a language. The intention is one of <proceed>, <quit>, <go_to_main_topics>, <go_to_sub_topics>, <exit_quiz>, <exit_lesson>, <proceed_to_quiz>, <question>.\n"
                        "<proceed>: The user wants to go to the next step.\n"
                        "<quit>: The user wants to exit the portal.\n"
                        "<go_to_main_topics>: The user wants to go to the main topic selection step. There are main topics covering the basics of regarding language.\n"
                        "<go_to_sub_topics>: The user wants to go to the sub topic selection step. A sub topic is one part of the previously selected main topic.\n"
                        "<exit_quiz>: The user wants to end the quiz step, the reason might also be finishing the quiz.\n"
                        "<exit_lesson>: The user wants to end the lesson for the selected topic.\n"
-                       "<proceed_to_quiz>: The user wants to go to the quiz step.",
+                       "<proceed_to_quiz>: The user wants to go to the quiz step.\n"
+                       "<question>: The user asks a question to get educated more on some learning objective.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "intention": {
                     "type": "string",
-                    "description": "The intention of the user. It should one of the tags: <proceed>, <quit>, <go_to_main_topics>, <go_to_sub_topics>, <exit_quiz>, <exit_lesson>, <proceed_to_quiz>"
+                    "description": "The intention of the user. It should one of the tags: <proceed>, <quit>, <go_to_main_topics>, <go_to_sub_topics>, <exit_quiz>, <exit_lesson>, <proceed_to_quiz>, <question>."
                 }
             },
             "required": ["intention"]
@@ -111,7 +147,8 @@ def detect_user_intention(intention_history):
         max_tokens = 1000,
         temperature = 0,
         messages = intention_history,
-        tools = [tool_definition]
+        tools = [tool_definition],
+        tool_choice= {"type": "tool", "name": "intention_detector"}
     )
 
     if message.stop_reason == "tool_use":
@@ -289,6 +326,7 @@ def organizer_by_state(state=0):
             "sub_topics": None,
             "sub_topic": None,
             "learning_objectives": {},
+            "current_learning_objective": None,
             "teachings": {}
         }
 
@@ -363,6 +401,18 @@ def organizer_by_state(state=0):
                 elif intention == intentions[6]:
                     print("I think you want to start a quiz but we didn't even started the lesson yet. So, we can start with the main topics first.")
                     main_topics = main_topics_section(state_machine['user_info'])
+                else:
+                    print(f"This intention is not covered yet: {intention}")
+                    user_response = input()
+                    intention_history[-1] = {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    }
                 if main_topics is not None:
                     state_machine['state'] = 2
                     state_machine['main_topics'] = main_topics
@@ -485,6 +535,18 @@ def organizer_by_state(state=0):
                     })
                 elif intention == intentions[6]:
                     print("I understand you want to proceed the quiz but you didn't select the sub topic yet. To continue, can you select a main topic please.")
+                    user_response = input()
+                    intention_history[-1] = {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    }
+                else:
+                    print(f"This intention is not covered yet: {intention}")
                     user_response = input()
                     intention_history[-1] = {
                         "role": "user",
@@ -635,6 +697,18 @@ def organizer_by_state(state=0):
                             }
                         ]
                     }
+                else:
+                    print(f"This intention is not covered yet: {intention}")
+                    user_response = input()
+                    intention_history[-1] = {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    }
                 if sub_topic is not None:
                     state_machine['state'] = 5
                     state_machine['sub_topic'] = sub_topic
@@ -679,6 +753,7 @@ def organizer_by_state(state=0):
             for learning_objective in state_machine['learning_objectives'][heading]:
                 if learning_objective['state'] == "not_known":
                     objective = learning_objective['objective']
+                    state_machine['current_learning_objective'] = objective
                     print(f"Current objective is:\n{objective}")
 
                     teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching)
@@ -690,7 +765,7 @@ def organizer_by_state(state=0):
                     state_machine['state'] = 7
                     break
 
-            state_machine['state'] = 7
+            state_machine['state'] = 8
 
         elif state_machine['state'] == 7:
             with open("state_machine_7.json", "w") as f:
@@ -698,10 +773,142 @@ def organizer_by_state(state=0):
             with open("intention_history_7.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
 
-            print("Will be implemented soon!!!!")
-            # TODO user intentioni algilanacak ama kurs icin farkli bir intention detection yazilabilir
-            # TODO daha sonrasinda question varsa cevaplanacak, yoksa state 6 ile devam edilecek
+            user_response = input()
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
+            teaching = state_machine['teachings'][heading]
+            teaching.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_response
+                    }
+                ]
+            })
+
+            while True:
+                is_relevant = relevant_check(teaching)
+                print("is relevant:", is_relevant)
+                intention = detect_user_intention(intention_history + teaching)
+                print("intention:", intention)
+                if intention == intentions[0]:
+                    state_machine['state'] = 6
+                    for learning_objective in state_machine['learning_objectives'][heading]:
+                        if learning_objective['objective'] == state_machine['current_learning_objective']:
+                            learning_objective['state'] = 'taught'
+                            state_machine['current_learning_objective'] = None
+                            break
+                    break
+                elif intention == intentions[1]:
+                    print("See you later!")
+                    return
+                elif intention == intentions[2]:
+                    print("Let's look at the main topics again.")
+                    state_machine['state'] = 2
+                    state_machine['main_topic'] = None
+                    break
+                elif intention == intentions[3]:
+                    print("Let's look at the sub topics again.")
+                    state_machine['state'] = 4
+                    state_machine['sub_topic'] = None
+                    break
+                elif intention == intentions[4]:
+                    print("You were not in the quiz. Do you want me to continue or do you have questions related to the topics discussed?")
+                    user_response = input()
+                    teaching[-1] = {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    }
+                    continue
+                elif intention == intentions[5]:
+                    assistant_response = "I understand you want to exit the lesson. Do you want to quit, go to another lesson, or take a quiz?"
+                    print(assistant_response)
+                    user_response = input()
+                    teaching.append({
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": assistant_response
+                            }
+                        ]
+                    })
+                    teaching.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    })
+                    continue
+                elif intention == intentions[6]:
+                    print("I understand you want to take the quiz now!")
+                    state_machine['state'] = 8
+                    state_machine['teachings'][heading] = teaching
+                    break
+                elif intention == intentions[7]:
+                    teaching, teacher_text = answer_question(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], state_machine['current_learning_objective'], teaching)
+                    print(teacher_text)
+                    state_machine['teachings'][heading] = teaching
+                    user_response = input()
+                    teaching.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    })
+                    continue
+                else:
+                    print(f"this intention is not covered yet: {intention}")
+                    user_response = input()
+                    teaching[-1] = {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    }
+                    continue
+        else:
+            print(f"This state is not implemented yet: State {state_machine['state']}")
             return
+
+# intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
+
+def answer_question(user_info, sub_topic, main_topic, learning_objective, teaching):
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. Do not ask any question to the student. Speak in English!",
+        messages=teaching
+    )
+
+    teacher_text = message.content[0].text
+    teacher_text += "\nDo you have any further question or do you want me to continue to the lecture?"
+    teaching.append({
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": teacher_text
+            }
+        ]
+    })
+
+    return teaching, teacher_text
 
 
 def teach_learning_objective(user_info, sub_topic, main_topic, learning_objective, teaching):
@@ -737,7 +944,7 @@ def teach_learning_objective(user_info, sub_topic, main_topic, learning_objectiv
         model=model,
         max_tokens=1000,
         temperature=0,
-        system=f"You are a professor who teaches elementary {user_info['language']} for foreign students, you speak English. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. Do not ask any question to the student!",
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. Do not ask any question to the student. Speak in English!",
         messages=teaching
     )
 
@@ -784,10 +991,9 @@ def learning_objectives_definition(user_info, sub_topic, main_topic):
     return objectives
 
 
-
-# intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz"]
-
 if __name__ == '__main__':
+
+    relevant_check_enabled = False
 
     API_KEY = os.getenv("API_KEY")
     if API_KEY is None:
@@ -798,14 +1004,11 @@ if __name__ == '__main__':
     if API_KEY is None:
         print("No API key found. Please provide an API key or create an api_key.txt file in the same directory.")
     else:
-        model = "claude-3-haiku-20240307"
+        # model = "claude-3-haiku-20240307"
         # model = "claude-3-5-haiku-20241022"
-        # model = "claude-3-5-sonnet-latest"
-        intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz"]
-        # TODO: change user info intention
-
+        model = "claude-3-5-sonnet-latest"
+        intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
+        # TODO genel olarak intention related kisimlar gozden gecirilecek
         client = anthropic.Anthropic(api_key=API_KEY)
-        organizer_by_state(state=0)
-
-    # TODO -> intentionlara irrelevant eklenebilir, kullanici cok alakasiz bir sey soylediyse, bot 'anlamadim tekrar soyler misin' gibi bi sey diyebilir
+        organizer_by_state(state=6)
     
