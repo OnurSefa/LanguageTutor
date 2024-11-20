@@ -750,6 +750,7 @@ def organizer_by_state(state=0):
             else:
                 teaching = None
 
+            taught = False
             for learning_objective in state_machine['learning_objectives'][heading]:
                 if learning_objective['state'] == "not_known":
                     objective = learning_objective['objective']
@@ -757,15 +758,18 @@ def organizer_by_state(state=0):
                     print(f"Current objective is:\n{objective}")
 
                     teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching)
+                    learning_objective['lesson'] += teaching[-2:]
                     state_machine['teachings'][heading] = teaching
                     print("-------")
                     print(teaching[-1]['content'][0]['text'])
                     print("-------")
                     learning_objective['state'] = "taught"
                     state_machine['state'] = 7
+                    taught = True
                     break
 
-            state_machine['state'] = 8
+            if not taught:
+                state_machine['state'] = 8
 
         elif state_machine['state'] == 7:
             with open("state_machine_7.json", "w") as f:
@@ -857,6 +861,9 @@ def organizer_by_state(state=0):
                     teaching, teacher_text = answer_question(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], state_machine['current_learning_objective'], teaching)
                     print(teacher_text)
                     state_machine['teachings'][heading] = teaching
+                    for learning_objective in state_machine['learning_objectives'][heading]:
+                        if learning_objective['objective'] == state_machine['current_learning_objective']:
+                            learning_objective['lesson'] += teaching[-2:]
                     user_response = input()
                     teaching.append({
                         "role": "user",
@@ -882,8 +889,18 @@ def organizer_by_state(state=0):
                     }
                     continue
         else:
+
+            with open("state_machine_latest.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_latest.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
             print(f"This state is not implemented yet: State {state_machine['state']}")
             return
+
+        with open("state_machine_latest.json", "w") as f:
+            json.dump(state_machine, f, indent=4)
+        with open("intention_history_latest.json", "w") as f:
+            json.dump(intention_history, f, indent=4)
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
 
@@ -964,7 +981,7 @@ def teach_learning_objective(user_info, sub_topic, main_topic, learning_objectiv
 
 
 def learning_objectives_definition(user_info, sub_topic, main_topic):
-    user_prompt = f"Define the core learning objectives of the {sub_topic} topic. The learning objective should only be correlated with the {sub_topic} topic but not coincide with others. List each related objective in between <objective> tags."
+    user_prompt = f"Define the core learning objectives of the {sub_topic} topic. The learning objective should only be correlated with the {sub_topic} topic but not coincide with others. List each related objective in between <objective> tags. There should be exactly 3 learning objectives. Each objective should be unique. Think like we are splitting the {sub_topic} topic into 3 parts."
 
     message = client.messages.create(
         model = model,
@@ -986,7 +1003,7 @@ def learning_objectives_definition(user_info, sub_topic, main_topic):
 
     objectives = []
     for objective in re.findall(r"<objective>.*</objective>", message.content[0].text):
-        objectives.append({"objective": objective[11:-12], "state": "not_known"})
+        objectives.append({"objective": objective[11:-12], "state": "not_known", "lesson": []})
 
     return objectives
 
@@ -1010,5 +1027,5 @@ if __name__ == '__main__':
         intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
         # TODO genel olarak intention related kisimlar gozden gecirilecek
         client = anthropic.Anthropic(api_key=API_KEY)
-        organizer_by_state(state=6)
+        organizer_by_state(state=5)
     
