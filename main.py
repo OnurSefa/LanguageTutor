@@ -2,6 +2,9 @@ import anthropic
 import re
 import json
 import os
+import random
+
+from alembic.command import current
 
 
 def detect_name_and_language(user_response):
@@ -888,6 +891,37 @@ def organizer_by_state(state=0):
                         ]
                     }
                     continue
+
+        elif state_machine['state'] == 8:
+            with open("state_machine_8.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_8.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
+            learning_objectives = state_machine['learning_objectives'][heading].copy()
+            random.shuffle(learning_objectives)
+            quizzes = []
+            for learning_objective in learning_objectives:
+                if learning_objective['state'] == 'taught':
+                    blank_space_quiz = prepare_quiz_blank_space(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'])
+                    quizzes.append({
+                        "type": "blank_space",
+                        "quiz": blank_space_quiz
+                    })
+                else:
+                    print('what?')
+
+            quiz_sheet = prepare_quiz_sheet(quizzes)
+            with open('quiz_sheet.txt', 'w') as f:
+                f.write(quiz_sheet)
+            print("\nQUIZ SAVED TO quiz_sheet.txt\nPlease open it and complete the questions. When you save your changes on the same file, please type COMPLETED here")
+            while True:
+                user_response = input()
+                if user_response == 'COMPLETED':
+                    break
+            state_machine['state'] = 9
+
         else:
 
             with open("state_machine_latest.json", "w") as f:
@@ -903,6 +937,69 @@ def organizer_by_state(state=0):
             json.dump(intention_history, f, indent=4)
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
+
+def prepare_quiz_sheet(quizzes):
+    quiz_text = "\n\nIMPORTANT NOTE: Please do not change the type of the document. Only write your answers to the according answer sheet in between ======ANSWER===== decorators.\n\n"
+
+    for quiz in quizzes:
+        if quiz['type'] == "blank_space":
+            quiz_text += "FILL IN THE BLANK SPACES IN THE BELOW SENTENCES\n"
+        for q, question in enumerate(quiz['quiz']):
+            quiz_text += f"{q + 1}-> {question['sentence']}\n"
+        quiz_text += "\n======ANSWER=====\n"
+        for q, question in enumerate(quiz['quiz']):
+            quiz_text += f"{q + 1}-> \n"
+        quiz_text += "\n======ANSWER=====\n"
+
+    return quiz_text
+
+
+def prepare_quiz_blank_space(user_info, main_topic, sub_topic, learning_objective, teaching):
+    user_message = ("Prepare me 10 questions as a blank space quiz. Each question should be in between <question> tags. Each question should include a phrase in between <blank> tags and the student will be asked to predict these phrases. Each question should include English complete description in between ()."
+                    "For instance, a question structure can be like the following:"
+                    f"<question>{user_info['language']} sentence related to the lecture and <blank>here is the phrase</blank> that will predicted by the student (here will be the description of the sentence)</question>"
+                    f""
+                    f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions."
+                    f"\nThe lecture:")
+    for part in teaching:
+        if part['role'] == "user":
+            tag = "Student"
+        else:
+            tag = "Teacher"
+        current_line = f"<{tag}>{part['content'][0]['text']}</{tag}>"
+        user_message += "\n" + current_line
+
+    user_message += "\n\nGive me the questions."
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. You need to prepare a quiz assessing the students capabilities regarding the given lecture.",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message
+                    }
+                ]
+            }
+        ]
+    )
+    quiz = message.content[0].text
+    structured_quiz = []
+    for question in re.findall(r"<question>.*?</question>", quiz, re.DOTALL):
+        blank_search = re.search(r"<blank>.*?</blank>", question, re.DOTALL)
+        if blank_search is None:
+            continue
+        structured_quiz.append({
+            "sentence": (question[:blank_search.span(0)[0]] + " ____________ " + question[blank_search.span(0)[1]:])[10:-11].strip(),
+            "answer": blank_search.group(0)[7:-8].strip()
+        })
+    return structured_quiz
+
 
 def answer_question(user_info, sub_topic, main_topic, learning_objective, teaching):
     message = client.messages.create(
@@ -1027,5 +1124,5 @@ if __name__ == '__main__':
         intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
         # TODO genel olarak intention related kisimlar gozden gecirilecek
         client = anthropic.Anthropic(api_key=API_KEY)
-        organizer_by_state(state=5)
+        organizer_by_state(state=0)
     
