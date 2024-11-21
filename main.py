@@ -330,7 +330,8 @@ def organizer_by_state(state=0):
             "sub_topic": None,
             "learning_objectives": {},
             "current_learning_objective": None,
-            "teachings": {}
+            "teachings": {},
+            "quizzes": None
         }
 
         intention_history = None
@@ -902,25 +903,40 @@ def organizer_by_state(state=0):
             learning_objectives = state_machine['learning_objectives'][heading].copy()
             random.shuffle(learning_objectives)
             quizzes = []
-            for learning_objective in learning_objectives:
+            quiz_types = ["blank_space", "translate", "match"]
+            random.shuffle(quiz_types)
+            for l, learning_objective in enumerate(learning_objectives):
                 if learning_objective['state'] == 'taught':
-                    blank_space_quiz = prepare_quiz_blank_space(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'])
+                    quiz = None
+                    quiz_type = quiz_types[l]
+                    if quiz_type == "blank_space":
+                        quiz = prepare_quiz_blank_space(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'])
+                    elif quiz_type == "translate":
+                        quiz = prepare_quiz_translate(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'])
+                    elif quiz_type == "match":
+                        quiz = prepare_quiz_match(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'])
                     quizzes.append({
-                        "type": "blank_space",
-                        "quiz": blank_space_quiz
+                        "type": quiz_type,
+                        "quiz": quiz,
+                        "learning_objective": learning_objective
                     })
-                else:
-                    print('what?')
+            state_machine['quizzes'] = quizzes
+            state_machine['state'] = 9
 
-            quiz_sheet = prepare_quiz_sheet(quizzes)
+        elif state_machine['state'] == 9:
+            with open("state_machine_9.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_9.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+
+            quiz_sheet = prepare_quiz_sheet(state_machine['quizzes'])
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
+            look_up = prepare_look_up(quiz_sheet, state_machine['teachings'][heading], state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'])
+            quiz_sheet = look_up + quiz_sheet
             with open('quiz_sheet.txt', 'w') as f:
                 f.write(quiz_sheet)
             print("\nQUIZ SAVED TO quiz_sheet.txt\nPlease open it and complete the questions. When you save your changes on the same file, please type COMPLETED here")
-            while True:
-                user_response = input()
-                if user_response == 'COMPLETED':
-                    break
-            state_machine['state'] = 9
+            state_machine['state'] = 10
 
         else:
 
@@ -938,28 +954,192 @@ def organizer_by_state(state=0):
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
 
+def prepare_look_up(quiz_sheet, lesson, user_info, main_topic, sub_topic):
+    look_up = "Here are some important lecture notes that you might use in the quiz.\n"
+
+    user_message = (f"I have a quiz:\n<quiz>{quiz_sheet}</quiz>.\n"
+                    f"And here is the complete lecture I received:\n")
+    for part in lesson:
+        if part['role'] == "user":
+            tag = "Student"
+        else:
+            tag = "Teacher"
+        current_line = f"<{tag}>{part['content'][0]['text']}</{tag}>"
+        user_message += "\n" + current_line
+
+    user_message += "\n\nCan you prepare me a short look up table which consists of only the base necessary information in a distilled format in between <look_up> tags?"
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter. You need to prepare a look up table to help students to receive required information to be used in the quiz considering the given lecture.",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message
+                    }
+                ]
+            }
+        ]
+    )
+    response = message.content[0].text
+
+    response_search = re.search(r"<look_up>.*?</look_up>", response, re.DOTALL)
+    if response_search is None:
+        return None
+    look_up += response_search.group(0)[9:-10] + "\n\n"
+    return look_up
+
+
 def prepare_quiz_sheet(quizzes):
     quiz_text = "\n\nIMPORTANT NOTE: Please do not change the type of the document. Only write your answers to the according answer sheet in between ======ANSWER===== decorators.\n\n"
 
     for quiz in quizzes:
         if quiz['type'] == "blank_space":
             quiz_text += "FILL IN THE BLANK SPACES IN THE BELOW SENTENCES\n"
-        for q, question in enumerate(quiz['quiz']):
-            quiz_text += f"{q + 1}-> {question['sentence']}\n"
+            for q, question in enumerate(quiz['quiz']):
+                quiz_text += f"{q + 1}-> {question['sentence']}\n"
+        elif quiz['type'] == "translate":
+            quiz_text += "TRANSLATE THE PHRASES POINTED WITHIN ||-> <-|| SYMBOLS\n"
+            for q, question in enumerate(quiz['quiz']):
+                quiz_text += f"{q + 1}-> {question['sentence']}\n"
+        elif quiz['type'] == "match":
+            quiz_text += "MATCH THE PHRASES, WRITE ONLY THE CHARACTER (for instance, 1-> c  2-> d)\n"
+            for q, question in enumerate(quiz['quiz']):
+                quiz_text += f"{q + 1}-> {question['eng']}\n"
+            quiz_text += "\n"
+            for q, question in enumerate(sorted(quiz['quiz'], key=lambda x:x["char"])):
+                quiz_text += f"{question['char']}-> {question['tar']}\n"
         quiz_text += "\n======ANSWER=====\n"
         for q, question in enumerate(quiz['quiz']):
             quiz_text += f"{q + 1}-> \n"
-        quiz_text += "\n======ANSWER=====\n"
+        quiz_text += "\n======ANSWER=====\n\n\n"
 
     return quiz_text
 
 
+def prepare_quiz_match(user_info, main_topic, sub_topic, learning_objective, teaching):
+    user_message = (f"Prepare me 10 questions as a matching quiz. Each question should be in between <question> tags. Each question will be consisting of a pair. There should be English phrase and it's regarding pair will be {user_info['language']}. "
+                    f"Each pair should be related with the discussed learning objective in the lecture. Each question should include a <eng> tags including the English part of the pair and <target> tags including the target language part of the pair.\n"
+                    f"For instance, a question structure can be like the following:\n"
+                    f"<question><eng>English sentence or a phrase in here</eng><target>{user_info['language']} sentence or a phrase in here</target></question>\n"
+                    f"\n"
+                    f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
+                    f"The lecture:")
+    for part in teaching:
+        if part['role'] == "user":
+            tag = "Student"
+        else:
+            tag = "Teacher"
+        current_line = f"<{tag}>{part['content'][0]['text']}</{tag}>"
+        user_message += "\n" + current_line
+
+    user_message += "\n\nGive me the questions."
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. You need to prepare a quiz assessing the students capabilities regarding the given lecture.",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message
+                    }
+                ]
+            }
+        ]
+    )
+    quiz = message.content[0].text
+    structured_quiz = []
+    chars = ['a','b','c','d','e','f','g','h','i','j']
+    random.shuffle(chars)
+    for q, question in enumerate(re.findall(r"<question>.*?</question>", quiz, re.DOTALL)):
+        eng_search = re.search(r"<eng>.*?</eng>", question, re.DOTALL)
+        if eng_search is None:
+            continue
+        tar_search = re.search(r"<target>.*?</target>", question, re.DOTALL)
+        if tar_search is None:
+            continue
+        structured_quiz.append({
+            "eng": eng_search.group(0)[5:-6].strip(),
+            "tar": tar_search.group(0)[8:-9].strip(),
+            "number": str(q),
+            "char": chars[q]
+        })
+    return structured_quiz
+
+
+def prepare_quiz_translate(user_info, main_topic, sub_topic, learning_objective, teaching):
+    user_message = (f"Prepare me 10 questions as a translation quiz. Each question should be in between <question> tags. Each question will be a {user_info['language']} sentence "
+                    f"related to the discussed learning objective. Each question should include a portion in between <translate> tags and the student will be asked to translate these phrases to English. Give the correct translation answer in between <answer> tags which is also inside the question tags.\n"
+                    f"For instance, a question structure can be like the following:\n"
+                    f"<question>{user_info['language']} sentence related to the lecture and <translate> some portion of the sentence </translate> will be predicted by the student <answer>correct translation of the selected portion</answer></question>\n"
+                    f"\n"
+                    f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
+                    f"The lecture:")
+    for part in teaching:
+        if part['role'] == "user":
+            tag = "Student"
+        else:
+            tag = "Teacher"
+        current_line = f"<{tag}>{part['content'][0]['text']}</{tag}>"
+        user_message += "\n" + current_line
+
+    user_message += "\n\nGive me the questions."
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. You need to prepare a quiz assessing the students capabilities regarding the given lecture.",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message
+                    }
+                ]
+            }
+        ]
+    )
+    quiz = message.content[0].text
+    structured_quiz = []
+    for question in re.findall(r"<question>.*?</question>", quiz, re.DOTALL):
+        answer_search = re.search(r"<answer>.*?</answer>", question, re.DOTALL)
+        if answer_search is None:
+            continue
+        answer = answer_search.group()[8:-9]
+        question = question[:answer_search.span(0)[0]] + question[answer_search.span(0)[1]:]
+        translation_search = re.search(r"<translate>.*?</translate>", question, re.DOTALL)
+        if translation_search is None:
+            continue
+        translation = translation_search.group(0)[11:-12]
+        question = question[:translation_search.span(0)[0]] + "||->" + answer + "<-||" + question[translation_search.span(0)[1]:]
+        question = question[10:-11].replace("<translate>", "||-> ").replace("</translate>", " <-||")
+        structured_quiz.append({
+            "sentence": question.strip(),
+            "answer": translation.strip(),
+            "translation": answer.strip()
+        })
+    return structured_quiz
+
+
 def prepare_quiz_blank_space(user_info, main_topic, sub_topic, learning_objective, teaching):
     user_message = ("Prepare me 10 questions as a blank space quiz. Each question should be in between <question> tags. Each question should include a phrase in between <blank> tags and the student will be asked to predict these phrases. Each question should include English complete description in between ()."
-                    "For instance, a question structure can be like the following:"
+                    "For instance, a question structure can be like the following:\n"
                     f"<question>{user_info['language']} sentence related to the lecture and <blank>here is the phrase</blank> that will predicted by the student (here will be the description of the sentence)</question>"
                     f""
-                    f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions."
+                    f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
                     f"\nThe lecture:")
     for part in teaching:
         if part['role'] == "user":
@@ -1027,7 +1207,7 @@ def answer_question(user_info, sub_topic, main_topic, learning_objective, teachi
 
 def teach_learning_objective(user_info, sub_topic, main_topic, learning_objective, teaching):
     if teaching is None:
-        user_prompt = f"Hello, my name is {user_info['name']}. Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Describe it in English!"
+        user_prompt = f"Hello, my name is {user_info['name']}. Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Please help me to understand the lesson with comprehensive . Describe it in English!"
 
         teaching = [
             {
