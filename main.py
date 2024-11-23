@@ -936,8 +936,38 @@ def organizer_by_state(state=0):
             with open('quiz_sheet.txt', 'w') as f:
                 f.write(quiz_sheet)
             print("\nQUIZ SAVED TO quiz_sheet.txt\nPlease open it and complete the questions. When you save your changes on the same file, please type COMPLETED here")
-            state_machine['state'] = 10
+            user_response = input()
+            if user_response == "COMPLETED":
+                state_machine['state'] = 10
+            else:
+                print("TODO intention will be detected")
+                return
 
+        elif state_machine['state'] == 10:
+            with open("state_machine_10.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_10.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+
+            with open('quiz_sheet_copy.txt', 'r') as f:
+                quiz_sheet = f.read()
+            answers = get_answers(quiz_sheet)
+            sessions = []
+            for i in range(len(state_machine['quizzes'])):
+                quiz = state_machine['quizzes'][i]
+                feedback, session = get_feedback(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], quiz['learning_objective']['objective'], quiz, answers[i])
+                print(f"\n\nFOR THE QUIZ {i+1}:\n")
+                print(session[-1]['content'][0]['text'])
+                sessions.extend(session)
+
+            ### TODO
+            # 1 -> fail mi yoksa success mi karari verilecek
+            # 2 -> eger failse tekrar dersi almak ister misin diye sorulacak
+            # 3 -> eger successse baska bir konu incelemek ister misin diye sorulacak
+            # 4 -> user response alinip intention tespit edilecek while loop icerisinde
+            # 5 -> state belirlenecek buna uygun olarak
+
+            state_machine['state'] = 11
         else:
 
             with open("state_machine_latest.json", "w") as f:
@@ -953,6 +983,129 @@ def organizer_by_state(state=0):
             json.dump(intention_history, f, indent=4)
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
+
+
+def get_feedback(user_info, main_topic, sub_topic, learning_objective, quiz, answers):
+    user_message = (f"I solved a quiz and want you to evaluate my answers. Each question is between <question> tags and inside there is a real answer in between <answer> tags and my response in between <response> tags.\n"
+                    f"For instance example question looks like this:\n"
+                    f"<question>Example question is in here <answer>predefined answer is in here</answer><response>my response is in here<response></question>\n\n"
+                    f"Before this quiz, I took a lecture and here it is:\n")
+    for part in quiz['learning_objective']['lesson']:
+        if part['role'] == "user":
+            tag = "Student"
+        else:
+            tag = "Teacher"
+        current_line = f"<{tag}>{part['content'][0]['text']}</{tag}>"
+        user_message += "\n" + current_line
+
+    if quiz['type'] == "translate":
+        user_message += "\n\nFor the given lecture, I solved a translation quiz. The quiz expects to translate the phrases to the target language. The phrases are in between ||-> <-|| symbols. The quiz is here:"
+    elif quiz['type'] == "match":
+        user_message += "\n\nFor the given lecture, I solved a matching quiz. For each English phrase, I needed to select the correct target language phrase. The quiz is here:"
+    elif quiz['type'] == "blank_space":
+        user_message += "\n\nFor the given lecture, I solved a blank space quiz. For each blank space shown with '___' symbols, I needed to write the correct phrase. The quiz is here:"
+    for answer, question in zip(answers, quiz['quiz']):
+        if quiz['type'] == "translate":
+            user_message += "\n<question>" + question['sentence'] + "<answer>" + question['answer'] + "</answer>" + "<response>" + answer + "</response>" + "</question>"
+        elif quiz['type'] == "match":
+            current_answer = None
+            for q in quiz['quiz']:
+                if q['char'] == answer:
+                    current_answer = q['tar']
+                    break
+
+            user_message += "\n<question>" + question['eng'] + "<answer>" + question['tar'] + "</answer>" + "<response>"
+            if current_answer is not None:
+                user_message += current_answer
+            user_message += "</response>" + "</question>"
+
+        elif quiz['type'] == "blank_space":
+            user_message += "\n<question>" + question['sentence'] + "<answer>" + question['answer'] + "</answer>" + "<response>" + answer + "</response>" + "</question>"
+
+    user_message += "For each question give me an evaluation in between <eval> tags. This evaluation should include <true> or <false> label and an explanation why the response is correct or not."
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        temperature=0,
+        system=f"You are a professor who teaches elementary {user_info['language']}. Today's topic is {sub_topic} on the {main_topic} chapter, and the learning objective is ```{learning_objective}```. You need to evaluate the students capabilities regarding the given quiz and give feedback.",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message
+                    }
+                ]
+            }
+        ]
+    )
+
+    feedback = []
+    evaluations = message.content[0].text
+    for evaluation in re.findall(r"<eval>.*?</eval>", evaluations, re.DOTALL):
+        evaluation = evaluation[6:-7]
+        score_search = re.search("<true>", evaluation)
+        if score_search is not None:
+            score = True
+            evaluation = evaluation[:score_search.span(0)[0]] + evaluation[score_search.span(0)[1]:]
+        else:
+            score = False
+            score_search = re.search("<false>", evaluation)
+            if score_search is not None:
+                evaluation = evaluation[:score_search.span(0)[0]] + evaluation[score_search.span(0)[1]:]
+        feedback.append({
+            "score": score,
+            "evaluation": evaluation
+        })
+
+    teacher_message = ""
+    for i, feed in enumerate(feedback):
+        teacher_message += f"{i+1}-> Your answer is "
+        if feed['score']:
+            teacher_message += "CORRECT\n"
+        else:
+            teacher_message += "WRONG\n"
+        teacher_message += f"{feed['evaluation']}\n"
+
+    quiz_session = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": user_message
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": teacher_message
+                }
+            ]
+        }
+    ]
+    return feedback, quiz_session
+
+
+def get_answers(quiz_sheet):
+    answers = []
+    quiz_sheet = quiz_sheet.replace("======ANSWER=====", "answer", 1)
+    for answer in re.findall(r"======ANSWER=====.*?======ANSWER=====", quiz_sheet, re.DOTALL):
+        answer = answer[17:-18] + "11->"
+        current_answers = []
+        for i in range(1, 11):
+            answer_search = re.search(rf"{i}->.*?\n{i+1}->", answer, re.DOTALL)
+            answer_search = answer_search.group(0)[len(f"{i}->"):-len(f"{i+1}->")].strip()
+            current_answers.append(answer_search)
+        answers.append(current_answers)
+
+    return answers
+
 
 def prepare_look_up(quiz_sheet, lesson, user_info, main_topic, sub_topic):
     look_up = "Here are some important lecture notes that you might use in the quiz.\n"

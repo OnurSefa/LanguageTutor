@@ -5,3 +5,4 @@ __pycache__
 *.png
 api_key.txt
 quiz_sheet.txt
+*.txt
