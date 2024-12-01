@@ -733,7 +733,7 @@ def organizer_by_state(state=0):
             else:
                 state_machine['learning_objectives'] = {}
 
-            if learning_objectives is None:
+            if learning_objectives is None or len(learning_objectives) == 0:
                 state_machine['learning_objectives'][heading] = learning_objectives_definition(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'])
 
             state_machine['state'] = 6
@@ -756,12 +756,20 @@ def organizer_by_state(state=0):
 
             taught = False
             for learning_objective in state_machine['learning_objectives'][heading]:
-                if learning_objective['state'] == "not_known":
+                if learning_objective['state'] == "not_known" or learning_objective['state'] == 'failed':
                     objective = learning_objective['objective']
                     state_machine['current_learning_objective'] = objective
                     print(f"Current objective is:\n{objective}")
 
-                    teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching)
+                    failed_info = None
+                    if learning_objective['state'] == 'failed':
+                        quiz_text = prepare_quiz_sheet([learning_objective['quiz']])
+                        pure_answer = learning_objective['pure_answer']
+                        feedback_text = ""
+                        for fb_index, fb in enumerate(learning_objective['feedback']):
+                            feedback_text += f"{fb_index}-> {fb}\n"
+                        failed_info = f"Also consider that I took a quiz for the same learning objective:\n{quiz_text}\nMy answers were:\n{pure_answer}\nAnd I received the following feedback:\n{feedback_text}. So, give me a comprehensive description with more details and help me to understand the points where I tackle the most."
+                    teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching, failed_info)
                     learning_objective['lesson'] += teaching[-2:]
                     state_machine['teachings'][heading] = teaching
                     print("-------")
@@ -905,6 +913,14 @@ def organizer_by_state(state=0):
             quizzes = []
             quiz_types = ["blank_space", "translate", "match"]
             random.shuffle(quiz_types)
+            found_an_objective = False
+            for learning_objective in learning_objectives:
+                if learning_objective['state'] == 'taught' or learning_objective['state'] == 'failed':
+                    found_an_objective = True
+                    break
+            if not found_an_objective:
+                for learning_objective in learning_objectives:
+                    learning_objective['state'] = 'taught'
             for l, learning_objective in enumerate(learning_objectives):
                 if learning_objective['state'] == 'taught':
                     quiz = None
@@ -920,6 +936,27 @@ def organizer_by_state(state=0):
                         "quiz": quiz,
                         "learning_objective": learning_objective
                     })
+                elif learning_objective['state'] == 'failed':
+                    quiz_text = prepare_quiz_sheet([learning_objective['quiz']])
+                    pure_answer = learning_objective['pure_answer']
+                    feedback_text = ""
+                    for fb_index, fb in enumerate(learning_objective['feedback']):
+                        feedback_text += f"{fb_index}-> {fb}\n"
+                    prev_info = f"Also consider that I had another quiz earlier:\n{quiz_text}\nMy answers were:\n{pure_answer}\nAnd I received the following feedback:\n{feedback_text}Can you prepare the quiz so that it's not directly copy of my previous quiz and the new quiz assesses my knowledge better?"
+                    quiz = None
+                    quiz_type = quiz_types[l]
+                    if quiz_type == "blank_space":
+                        quiz = prepare_quiz_blank_space(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'], prev_info)
+                    elif quiz_type == "translate":
+                        quiz = prepare_quiz_translate(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'], prev_info)
+                    elif quiz_type == "match":
+                        quiz = prepare_quiz_match(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], learning_objective['objective'], learning_objective['lesson'], prev_info)
+                    quizzes.append({
+                        "type": quiz_type,
+                        "quiz": quiz,
+                        "learning_objective": learning_objective
+                    })
+
             state_machine['quizzes'] = quizzes
             state_machine['state'] = 9
 
@@ -941,7 +978,8 @@ def organizer_by_state(state=0):
                 state_machine['state'] = 10
             else:
                 print("TODO intention will be detected")
-                return
+                state_machine['state'] = 10
+                # return
 
         elif state_machine['state'] == 10:
             with open("state_machine_10.json", "w") as f:
@@ -949,25 +987,189 @@ def organizer_by_state(state=0):
             with open("intention_history_10.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
 
-            with open('quiz_sheet_copy.txt', 'r') as f:
+            with open('quiz_sheet.txt', 'r') as f:
                 quiz_sheet = f.read()
-            answers = get_answers(quiz_sheet)
+            answers, pure_answers = get_answers(quiz_sheet)
             sessions = []
+            failed_objectives = []
+            known_objectives = []
+            heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
             for i in range(len(state_machine['quizzes'])):
                 quiz = state_machine['quizzes'][i]
+                state_machine['quizzes'][i]['pure_answer'] = pure_answers[i]
                 feedback, session = get_feedback(state_machine['user_info'], state_machine['main_topic'], state_machine['sub_topic'], quiz['learning_objective']['objective'], quiz, answers[i])
+                total = 0
+                correct = 0
+                for fb in feedback:
+                    total += 1
+                    if fb['score']:
+                        correct += 1
+                for learning_objective in state_machine['learning_objectives'][heading]:
+                    if learning_objective['objective'] == quiz['learning_objective']['objective']:
+                        if correct / total >= 0.7:
+                            known_objectives.append(learning_objective['objective'])
+                            learning_objective['state'] = "known"
+                        else:
+                            failed_objectives.append(learning_objective['objective'])
+                            learning_objective['state'] = "failed"
+                            learning_objective['quiz'] = quiz
+                            learning_objective['feedback'] = feedback
+                            learning_objective['pure_answer'] = quiz['pure_answer']
+                        break
+
                 print(f"\n\nFOR THE QUIZ {i+1}:\n")
                 print(session[-1]['content'][0]['text'])
                 sessions.extend(session)
 
-            ### TODO
-            # 1 -> fail mi yoksa success mi karari verilecek
-            # 2 -> eger failse tekrar dersi almak ister misin diye sorulacak
-            # 3 -> eger successse baska bir konu incelemek ister misin diye sorulacak
-            # 4 -> user response alinip intention tespit edilecek while loop icerisinde
-            # 5 -> state belirlenecek buna uygun olarak
+            bot_response = ""
+            if len(known_objectives) > 0:
+                if len(known_objectives) == 1:
+                    bot_response += "Well Done! You successfully learned the following objective:\n"
+                else:
+                    bot_response += "Well Done! You successfully learned the following objectives:\n"
+                for objective in known_objectives:
+                    bot_response += f"\t- {objective}\n"
+            if len(failed_objectives) > 0:
+                if len(failed_objectives) == 1:
+                    bot_response += "Unfortunately, you failed to learn the following objective:\n"
+                else:
+                    bot_response += "Unfortunately, you failed to learn the following objectives:\n"
+                for objective in failed_objectives:
+                    bot_response += f"\t- {objective}\n"
+                bot_response += "Do you want to retake the current lesson?"
+            else:
+                bot_response += "Do you want to take another lesson?"
+
+            print(bot_response)
+            sessions[-1]['content'][0]['text'] += bot_response
+
+            user_response = input()
+            sessions.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_response
+                    }
+                ]
+            })
 
             state_machine['state'] = 11
+            continue
+
+            while True:
+                is_relevant = relevant_check(sessions)
+                print("is relevant:", is_relevant)
+                intention = detect_user_intention(sessions)
+                print("intention:", intention)
+
+                # proceed
+                if intention == intentions[0]:
+                    if len(failed_objectives) > 0:
+                        print("Let's study the lesson again.")
+                        state_machine['state'] = 6
+                    else:
+                        print("Let's look at the main topics again.")
+                        state_machine['state'] = 2
+                    break
+                # quit
+                elif intention == intentions[1]:
+                    print("See you later!")
+                    return
+                # go_to_main_topics
+                elif intention == intentions[2]:
+                    print("Let's look at the main topics again.")
+                    state_machine['state'] = 2
+                    break
+                # go_to_sub_topics
+                elif intention == intentions[3]:
+                    print("Let's look at the sub topics again.")
+                    state_machine['state'] = 4
+                    break
+                # exit_quiz
+                elif intention == intentions[4]:
+                    bot_response = "You already finished the quiz, do you want to proceed?"
+                    sessions.append({
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": bot_response
+                            }
+                        ]
+                    })
+                    print(bot_response)
+                    user_response = input()
+                    sessions.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    })
+                    continue
+                # exit lesson
+                elif intention == intentions[5]:
+                    bot_response = "Current lesson already finished, do you want to quit?"
+                    sessions.append({
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": bot_response
+                            }
+                        ]
+                    })
+                    user_response = input()
+                    sessions.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    })
+                    continue
+                # proceed to quiz
+                elif intention == intentions[6]:
+                    print("I understand you want to retake the quiz.")
+                    state_machine['state'] = 8
+                    break
+                # question
+                elif intention == intentions[7]:
+                    bot_response = "Before answering your question, I need to know how would like you continue?"
+                    print(bot_response)
+                    sessions.append({
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": bot_response
+                            }
+                        ]
+                    })
+                    user_response = input()
+                    sessions.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_response
+                            }
+                        ]
+                    })
+                    continue
+
+        elif state_machine['state'] == 11:
+            with open("state_machine_11.json", "w") as f:
+                json.dump(state_machine, f, indent=4)
+            with open("intention_history_11.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+            state_machine['state'] = 6
+
         else:
 
             with open("state_machine_latest.json", "w") as f:
@@ -1094,8 +1296,10 @@ def get_feedback(user_info, main_topic, sub_topic, learning_objective, quiz, ans
 
 def get_answers(quiz_sheet):
     answers = []
+    pure_answers = []
     quiz_sheet = quiz_sheet.replace("======ANSWER=====", "answer", 1)
     for answer in re.findall(r"======ANSWER=====.*?======ANSWER=====", quiz_sheet, re.DOTALL):
+        pure_answers.append(answer[17:-18])
         answer = answer[17:-18] + "11->"
         current_answers = []
         for i in range(1, 11):
@@ -1103,8 +1307,7 @@ def get_answers(quiz_sheet):
             answer_search = answer_search.group(0)[len(f"{i}->"):-len(f"{i+1}->")].strip()
             current_answers.append(answer_search)
         answers.append(current_answers)
-
-    return answers
+    return answers, pure_answers
 
 
 def prepare_look_up(quiz_sheet, lesson, user_info, main_topic, sub_topic):
@@ -1175,7 +1378,7 @@ def prepare_quiz_sheet(quizzes):
     return quiz_text
 
 
-def prepare_quiz_match(user_info, main_topic, sub_topic, learning_objective, teaching):
+def prepare_quiz_match(user_info, main_topic, sub_topic, learning_objective, teaching, prev_info=None):
     user_message = (f"Prepare me 10 questions as a matching quiz. Each question should be in between <question> tags. Each question will be consisting of a pair. There should be English phrase and it's regarding pair will be {user_info['language']}. "
                     f"Each pair should be related with the discussed learning objective in the lecture. Each question should include a <eng> tags including the English part of the pair and <target> tags including the target language part of the pair.\n"
                     f"For instance, a question structure can be like the following:\n"
@@ -1183,6 +1386,8 @@ def prepare_quiz_match(user_info, main_topic, sub_topic, learning_objective, tea
                     f"\n"
                     f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
                     f"The lecture:")
+    if prev_info is not None:
+        user_message += f"\n{prev_info}"
     for part in teaching:
         if part['role'] == "user":
             tag = "Student"
@@ -1230,7 +1435,7 @@ def prepare_quiz_match(user_info, main_topic, sub_topic, learning_objective, tea
     return structured_quiz
 
 
-def prepare_quiz_translate(user_info, main_topic, sub_topic, learning_objective, teaching):
+def prepare_quiz_translate(user_info, main_topic, sub_topic, learning_objective, teaching, prev_info=None):
     user_message = (f"Prepare me 10 questions as a translation quiz. Each question should be in between <question> tags. Each question will be a {user_info['language']} sentence "
                     f"related to the discussed learning objective. Each question should include a portion in between <translate> tags and the student will be asked to translate these phrases to English. Give the correct translation answer in between <answer> tags which is also inside the question tags.\n"
                     f"For instance, a question structure can be like the following:\n"
@@ -1238,6 +1443,8 @@ def prepare_quiz_translate(user_info, main_topic, sub_topic, learning_objective,
                     f"\n"
                     f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
                     f"The lecture:")
+    if prev_info is not None:
+        user_message += f"\n{prev_info}"
     for part in teaching:
         if part['role'] == "user":
             tag = "Student"
@@ -1287,13 +1494,15 @@ def prepare_quiz_translate(user_info, main_topic, sub_topic, learning_objective,
     return structured_quiz
 
 
-def prepare_quiz_blank_space(user_info, main_topic, sub_topic, learning_objective, teaching):
+def prepare_quiz_blank_space(user_info, main_topic, sub_topic, learning_objective, teaching, prev_info=None):
     user_message = ("Prepare me 10 questions as a blank space quiz. Each question should be in between <question> tags. Each question should include a phrase in between <blank> tags and the student will be asked to predict these phrases. Each question should include English complete description in between ()."
                     "For instance, a question structure can be like the following:\n"
                     f"<question>{user_info['language']} sentence related to the lecture and <blank>here is the phrase</blank> that will predicted by the student (here will be the description of the sentence)</question>"
                     f""
                     f"The questions should be related to the material discussed in the lecture. Consider that learning objective is '{learning_objective}'. Prepare beginner level questions and only ask what is taught in the lecture.\n"
                     f"\nThe lecture:")
+    if prev_info is not None:
+        user_message += f"\n{prev_info}"
     for part in teaching:
         if part['role'] == "user":
             tag = "Student"
@@ -1358,7 +1567,7 @@ def answer_question(user_info, sub_topic, main_topic, learning_objective, teachi
     return teaching, teacher_text
 
 
-def teach_learning_objective(user_info, sub_topic, main_topic, learning_objective, teaching):
+def teach_learning_objective(user_info, sub_topic, main_topic, learning_objective, teaching, failed_info=None):
     if teaching is None:
         user_prompt = f"Hello, my name is {user_info['name']}. Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Please help me to understand the lesson with comprehensive . Describe it in English!"
 
@@ -1375,8 +1584,12 @@ def teach_learning_objective(user_info, sub_topic, main_topic, learning_objectiv
         ]
 
     else:
-        user_prompt = f"Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic. Describe it in English!"
+        user_prompt = f"Give me regarding class helping to acquire the learning objective \"{learning_objective}\" in the {sub_topic} topic."
 
+        if failed_info is not None:
+            user_prompt += '\n' + failed_info
+
+        user_prompt += "\nDescribe it in English!"
         teaching.append({
             "role": "user",
             "content": [
@@ -1456,6 +1669,7 @@ if __name__ == '__main__':
         model = "claude-3-5-sonnet-latest"
         intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
         # TODO genel olarak intention related kisimlar gozden gecirilecek
+        # 10. state'ten 2 4 statelerine gecisi inceleyecegim
         client = anthropic.Anthropic(api_key=API_KEY)
-        organizer_by_state(state=0)
+        organizer_by_state(state=11)
     
