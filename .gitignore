@@ -7,3 +7,7 @@ api_key.txt
 quiz_sheet.txt
 *.txt
 memory
+selected_conversations
+questionary
+conversations
+selected_conversation_evaluations

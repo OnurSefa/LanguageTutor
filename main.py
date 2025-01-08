@@ -3,8 +3,8 @@ import re
 import json
 import os
 import random
-
-from alembic.command import current
+from uuid import uuid4
+import jsonpickle
 
 
 def detect_name_and_language(user_response):
@@ -37,28 +37,69 @@ def detect_name_and_language(user_response):
     return name, language
 
 
-def greeting():
+def greeting(conversation):
 
-    print("Hello there, I will be guiding you to learn any language you want in beginner level. Can you briefly mention about yourself and which language do you want to learn?")
+    system_message = "Hello there, I will be guiding you to learn any language you want in beginner level. Can you briefly mention about yourself and which language do you want to learn?"
+    conversation.append({
+        "role": 'system',
+        "message": system_message
+    })
+    print(system_message)
 
     user_response = input()
+    conversation.append({
+        "role": 'user',
+        "message": user_response
+    })
     name, language = detect_name_and_language(user_response)
 
     while name is None or language is None:
         if name is None and language is None:
-            print("Sorry, I didn't get your name and the language you're interested in. Can you provide these information?")
+            system_message = "Sorry, I didn't get your name and the language you're interested in. Can you provide these information?"
+            conversation.append({
+                "role": 'system',
+                "message": system_message
+            })
+            print(system_message)
             user_response = input()
+            conversation.append({
+                "role": 'user',
+                "message": user_response
+            })
             name, language = detect_name_and_language(user_response)
         elif name is None:
-            print("Sorry, I didn't get your name. Can you provide me your name, so I can speak with you more freely")
+            system_message = "Sorry, I didn't get your name. Can you provide me your name, so I can speak with you more freely"
+            conversation.append({
+                "role": 'system',
+                "message": system_message
+            })
+            print(system_message)
             user_response = input()
+            conversation.append({
+                "role": 'user',
+                "message": user_response
+            })
             name, _ = detect_name_and_language(user_response)
         elif language is None:
-            print("Sorry, I didn't get the language you're interested in. To provide you the required language education, I need this information. What language do you want to learn?")
+            system_message = "Sorry, I didn't get the language you're interested in. To provide you the required language education, I need this information. What language do you want to learn?"
+            conversation.append({
+                "role": 'system',
+                "message": system_message
+            })
+            print(system_message)
             user_response = input()
+            conversation.append({
+                "role": 'user',
+                "message": user_response
+            })
             _, language = detect_name_and_language(user_response)
 
-    print(f"I am happy to meet you {name}\nLet's begin our {language} learning journey, shall we?")
+    system_message = f"I am happy to meet you {name}\nLet's begin our {language} learning journey, shall we?"
+    conversation.append({
+        "role": 'system',
+        "message": system_message
+    })
+    print(system_message)
     intention_history = [
         {
             "role": "user",
@@ -83,7 +124,7 @@ def greeting():
         "name": name,
         "language": language
     }
-    return intention_history, user_info
+    return intention_history, user_info, conversation
 
 
 def relevant_check(history):
@@ -145,6 +186,14 @@ def detect_user_intention(intention_history):
             "required": ["intention"]
         }
     }
+    for intention in intention_history:
+        if intention["content"] is None or len(intention['content']) == 0 or intention['content'][0]['text'] is None or len(intention['content'][0]['text']) == 0:
+            intention['content'] = [
+                {
+                    "type": "text",
+                    "text": "<no response>"
+                }
+            ]
     message = client.messages.create(
         model = model,
         max_tokens = 1000,
@@ -335,23 +384,36 @@ def organizer_by_state(state=0):
         }
 
         intention_history = None
+        conversation = []
     else:
         with open(f'state_machine_{state}.json', 'r') as f:
             state_machine = json.load(f)
+            conversation = state_machine['conversation']
         with open(f'intention_history_{state}.json', 'r') as f:
             intention_history = json.load(f)
 
+    conversation_id = uuid4()
+    print('conversation_id', conversation_id)
+
     while True:
+        latest_state = 0
         if state_machine["state"] == 0:
+            latest_state = 0
             with open("state_machine_0.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_0.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
-            intention_history, user_info = greeting()
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
+            intention_history, user_info, conversation = greeting(conversation)
             state_machine["state"] = 1
             state_machine["user_info"] = user_info
             user_response = input()
-
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             intention_history.append({
                 "role": "user",
                 "content": [
@@ -361,34 +423,63 @@ def organizer_by_state(state=0):
                     }
                 ]
             })
+
         elif state_machine["state"] == 1:
+            latest_state = 1
             with open("state_machine_1.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_1.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
             main_topics = None
             while True:
                 intention = detect_user_intention(intention_history)
                 if intention == intentions[0] or intention == intentions[2]:
                     main_topics = main_topics_section(state_machine['user_info'])
                 elif intention == intentions[1]:
-                    print("I understand you want to quit the lesson here. See you next time!")
-                    return
+                    system_message = "I understand you want to quit the lesson here. See you next time!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
+                    return conversation_id, conversation, state_machine, intention_history, latest_state
                 elif intention == intentions[3]:
-                    print("I understand you want to see some sub topics but let me first introduce the main topics here.")
+                    system_message = "I understand you want to see some sub topics but let me first introduce the main topics here."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     main_topics = main_topics_section(state_machine['user_info'])
                 elif intention == intentions[4]:
-                    print("I think there is some confusion. I think you want to quit a quiz but we didn't started the quiz yet. So let's start with the main topics.")
+                    system_message = "I think there is some confusion. I think you want to quit a quiz but we didn't started the quiz yet. So let's start with the main topics."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     main_topics = main_topics_section(state_machine['user_info'])
                 elif intention == intentions[5]:
-                    print("I think you want to end the lesson that we didn't started yet. Do you want to quit the whole course?")
+                    system_message = "I think you want to end the lesson that we didn't started yet. Do you want to quit the whole course?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history.append({
                         "role": "assistant",
                         "content": [
                             {
                                 "type": "text",
-                                "text": "I think you want to end the lesson that we didn't started yet. Do you want to quit the whole course?"
+                                "text": system_message
                             }
                         ]
                     })
@@ -401,13 +492,27 @@ def organizer_by_state(state=0):
                             }
                         ]
                     })
-                    # intention = detect_user_intention(intention_history)
                 elif intention == intentions[6]:
-                    print("I think you want to start a quiz but we didn't even started the lesson yet. So, we can start with the main topics first.")
+                    system_message = "I think you want to start a quiz but we didn't even started the lesson yet. So, we can start with the main topics first."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     main_topics = main_topics_section(state_machine['user_info'])
+                # TODO question intention will be added
                 else:
-                    print(f"This intention is not covered yet: {intention}")
+                    system_message = f"This intention is not covered yet: {intention}"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -428,18 +533,30 @@ def organizer_by_state(state=0):
             state_machine['sub_topics'] = sub_topics
 
         elif state_machine["state"] == 2:
+            latest_state = 2
             with open("state_machine_2.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_2.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             main_topics_response = f"For the {state_machine['user_info']['language']} Language, main topics are:"
             for t, topic in enumerate(state_machine['main_topics']):
                 main_topics_response += f"\n\t{t+1}. {topic}"
             main_topics_response += "\nWhich topic would you like to start with?"
+            conversation.append({
+                "role": "system",
+                "message": main_topics_response
+            })
             print(main_topics_response)
 
             user_response = input()
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             intention_history.append({
                 "role": "assistant",
                 "content": [
@@ -462,14 +579,21 @@ def organizer_by_state(state=0):
             main_topic = None
             while True:
                 intention = detect_user_intention(intention_history)
-                print('your intention', intention)
                 if intention == intentions[0] or intention == intentions[3]:
                     main_topic = detect_main_topic_selection(state_machine['user_info'], main_topics_response, user_response,
                                                              state_machine['main_topics'])
                     if main_topic is None:
                         bot_response = "I couldn't understand which main topic you want to pursue, can you please select a main topic?"
+                        conversation.append({
+                            "role": "system",
+                            "message": bot_response
+                        })
                         print(bot_response)
                         user_response = input()
+                        conversation.append({
+                            "role": "user",
+                            "message": user_response
+                        })
                         intention_history.append({
                             "role": "assistant",
                             "content": [
@@ -489,12 +613,30 @@ def organizer_by_state(state=0):
                             ]
                         })
                 elif intention == intentions[1]:
-                    print("See you later!")
-                    return
+                    system_message = "See you later!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
+                    return conversation_id, conversation, state_machine, intention_history, latest_state
                 elif intention == intentions[2]:
-                    print("Let's look at the main topics again.")
+                    system_message = "Let's look at the main topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
+                    conversation.append({
+                        "role": "system",
+                        "message": main_topics_response
+                    })
                     print(main_topics_response)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -505,8 +647,17 @@ def organizer_by_state(state=0):
                         ]
                     }
                 elif intention == intentions[4]:
-                    print("You were not in the quiz. Can you select a topic please to further?")
+                    system_message = "You were not in the quiz. Can you select a topic please to further?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -517,8 +668,17 @@ def organizer_by_state(state=0):
                         ]
                     }
                 elif intention == intentions[5]:
-                    print("I understand you want to exit the lesson. But, we didn't start the lesson yet. Do you want to quit the whole course?")
+                    system_message = "I understand you want to exit the lesson. But, we didn't start the lesson yet. Do you want to quit the whole course?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history.append({
                         "role": "assistant",
                         "content": [
@@ -538,8 +698,17 @@ def organizer_by_state(state=0):
                         ]
                     })
                 elif intention == intentions[6]:
-                    print("I understand you want to proceed the quiz but you didn't select the sub topic yet. To continue, can you select a main topic please.")
+                    system_message = "I understand you want to proceed the quiz but you didn't select the sub topic yet. To continue, can you select a main topic please."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -550,8 +719,18 @@ def organizer_by_state(state=0):
                         ]
                     }
                 else:
-                    print(f"This intention is not covered yet: {intention}")
+                    # TODO question intention will be added
+                    system_message = f"This intention is not covered yet: {intention}"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -567,27 +746,43 @@ def organizer_by_state(state=0):
                     break
 
         elif state_machine['state'] == 3:
+            latest_state = 3
             with open("state_machine_3.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_3.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             if state_machine['sub_topics'][state_machine['main_topic']] is None:
                 state_machine['sub_topics'][state_machine['main_topic']] = sub_topics_definition(state_machine['user_info'], state_machine['main_topic'])
             state_machine['state'] = 4
 
         elif state_machine['state'] == 4:
+            latest_state = 4
             with open("state_machine_4.json", "w") as f:
                 json.dump(state_machine, f, indent=4)
+                state_machine['conversation'] = conversation
             with open("intention_history_4.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             sub_topics_response = f"For the {state_machine['user_info']['language']} Language, the sub topics for the {state_machine['main_topic']}:"
             for t, topic in enumerate(state_machine['sub_topics'][state_machine['main_topic']]):
                 sub_topics_response += f"\n\t{t+1}. {topic}"
             sub_topics_response += "\nWhich sub topic would you like to study?"
+            conversation.append({
+                "role": "system",
+                "message": sub_topics_response
+            })
             print(sub_topics_response)
             user_response = input()
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             intention_history.append({
                 "role": "assistant",
                 "content": [
@@ -610,14 +805,21 @@ def organizer_by_state(state=0):
             sub_topic = None
             while True:
                 intention = detect_user_intention(intention_history)
-                print('your intention', intention)
                 if intention == intentions[0]:
                     sub_topic = sub_topic_selection(state_machine['user_info'], sub_topics_response, user_response, state_machine['main_topic'], state_machine['sub_topics'][state_machine['main_topic']])
 
                     if sub_topic is None:
                         bot_response = "I couldn't understand which sub topic you want to pursue, can you please select a sub topic?"
+                        conversation.append({
+                            "role": "system",
+                            "message": bot_response
+                        })
                         print(bot_response)
                         user_response = input()
+                        conversation.append({
+                            "role": "user",
+                            "message": user_response
+                        })
                         intention_history.append({
                             "role": "assistant",
                             "content": [
@@ -637,16 +839,35 @@ def organizer_by_state(state=0):
                             ]
                         })
                 elif intention == intentions[1]:
-                    print("See you later!")
-                    return
+                    system_response = "See you later!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_response
+                    })
+                    print(system_response)
+                    return conversation_id, conversation, state_machine, intention_history, latest_state
                 elif intention == intentions[2]:
-                    print("Let's look at the main topics again.")
+                    system_message = "Let's look at the main topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 2
                     state_machine['main_topic'] = None
                     break
                 elif intention == intentions[3]:
-                    print("You are already in the sub topic selection section. Can you select a sub topic please?")
+                    system_message = "You are already in the sub topic selection section. Can you select a sub topic please?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -657,8 +878,17 @@ def organizer_by_state(state=0):
                         ]
                     }
                 elif intention == intentions[4]:
-                    print("You were not in the quiz. Can you select a sub topic please to further?")
+                    system_message = "You were not in the quiz. Can you select a sub topic please to go further?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -669,8 +899,17 @@ def organizer_by_state(state=0):
                         ]
                     }
                 elif intention == intentions[5]:
-                    print("I understand you want to exit the lesson. But, we didn't start the lesson yet. Do you want to quit the whole course?")
+                    system_message = "I understand you want to exit the lesson. But, we didn't start the lesson yet. Do you want to quit the whole course?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history.append({
                         "role": "assistant",
                         "content": [
@@ -690,8 +929,17 @@ def organizer_by_state(state=0):
                         ]
                     })
                 elif intention == intentions[6]:
-                    print("I understand you want to proceed the quiz but you didn't select the sub topic yet. To continue, can you select a sub topic please.")
+                    system_message = "I understand you want to proceed the quiz but you didn't select the sub topic yet. To continue, can you select a sub topic please."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -702,8 +950,18 @@ def organizer_by_state(state=0):
                         ]
                     }
                 else:
-                    print(f"This intention is not covered yet: {intention}")
+                    # TODO question intention will be captured
+                    system_message = f"This intention is not covered yet: {intention}"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     intention_history[-1] = {
                         "role": "user",
                         "content": [
@@ -719,11 +977,21 @@ def organizer_by_state(state=0):
                     break
 
         elif state_machine['state'] == 5:
+            latest_state = 5
             with open("state_machine_5.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_5.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
-            print('sub topic you selected is:', state_machine['sub_topic'])
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
+
+            # system_message = 'sub topic you selected is:' + str(state_machine['sub_topic'])
+            # conversation.append({
+            #     "role": "system",
+            #     "message": system_message
+            # })
+            # print(system_message)
 
             learning_objectives = None
             heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
@@ -739,10 +1007,14 @@ def organizer_by_state(state=0):
             state_machine['state'] = 6
 
         elif state_machine['state'] == 6:
+            latest_state = 6
             with open("state_machine_6.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_6.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             if "teachings" not in state_machine:
                 state_machine['teachings'] = {}
@@ -759,7 +1031,6 @@ def organizer_by_state(state=0):
                 if learning_objective['state'] == "not_known" or learning_objective['state'] == 'failed':
                     objective = learning_objective['objective']
                     state_machine['current_learning_objective'] = objective
-                    print(f"Current objective is:\n{objective}")
 
                     failed_info = None
                     if learning_objective['state'] == 'failed':
@@ -772,6 +1043,10 @@ def organizer_by_state(state=0):
                     teaching = teach_learning_objective(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], objective, teaching, failed_info)
                     learning_objective['lesson'] += teaching[-2:]
                     state_machine['teachings'][heading] = teaching
+                    conversation.append({
+                        "role": "system",
+                        "message": teaching[-1]['content'][0]['text']
+                    })
                     print("-------")
                     print(teaching[-1]['content'][0]['text'])
                     print("-------")
@@ -784,12 +1059,20 @@ def organizer_by_state(state=0):
                 state_machine['state'] = 8
 
         elif state_machine['state'] == 7:
+            latest_state = 7
             with open("state_machine_7.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_7.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             user_response = input()
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
             teaching = state_machine['teachings'][heading]
             teaching.append({
@@ -803,10 +1086,10 @@ def organizer_by_state(state=0):
             })
 
             while True:
-                is_relevant = relevant_check(teaching)
-                print("is relevant:", is_relevant)
+                # is_relevant = relevant_check(teaching)
+                # print("is relevant:", is_relevant)
                 intention = detect_user_intention(intention_history + teaching)
-                print("intention:", intention)
+                # print("intention:", intention)
                 if intention == intentions[0]:
                     state_machine['state'] = 6
                     for learning_objective in state_machine['learning_objectives'][heading]:
@@ -816,21 +1099,45 @@ def organizer_by_state(state=0):
                             break
                     break
                 elif intention == intentions[1]:
-                    print("See you later!")
-                    return
+                    system_message = "See you later!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
+                    return conversation_id, conversation, state_machine, intention_history, latest_state
                 elif intention == intentions[2]:
-                    print("Let's look at the main topics again.")
+                    system_message = "Let's look at the main topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 2
                     state_machine['main_topic'] = None
                     break
                 elif intention == intentions[3]:
-                    print("Let's look at the sub topics again.")
+                    system_message = "Let's look at the sub topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 4
                     state_machine['sub_topic'] = None
                     break
                 elif intention == intentions[4]:
-                    print("You were not in the quiz. Do you want me to continue or do you have questions related to the topics discussed?")
+                    system_message = "You were not in the quiz. You can ask questions related to the topics discussed or would you like me to continue?"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     teaching[-1] = {
                         "role": "user",
                         "content": [
@@ -843,8 +1150,16 @@ def organizer_by_state(state=0):
                     continue
                 elif intention == intentions[5]:
                     assistant_response = "I understand you want to exit the lesson. Do you want to quit, go to another lesson, or take a quiz?"
+                    conversation.append({
+                        "role": "system",
+                        "message": assistant_response
+                    })
                     print(assistant_response)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     teaching.append({
                         "role": "assistant",
                         "content": [
@@ -865,18 +1180,31 @@ def organizer_by_state(state=0):
                     })
                     continue
                 elif intention == intentions[6]:
-                    print("I understand you want to take the quiz now!")
+                    system_message = "I understand you want to take the quiz now!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 8
                     state_machine['teachings'][heading] = teaching
                     break
                 elif intention == intentions[7]:
                     teaching, teacher_text = answer_question(state_machine['user_info'], state_machine['sub_topic'], state_machine['main_topic'], state_machine['current_learning_objective'], teaching)
+                    conversation.append({
+                        "role": "system",
+                        "message": teacher_text
+                    })
                     print(teacher_text)
                     state_machine['teachings'][heading] = teaching
                     for learning_objective in state_machine['learning_objectives'][heading]:
                         if learning_objective['objective'] == state_machine['current_learning_objective']:
                             learning_objective['lesson'] += teaching[-2:]
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     teaching.append({
                         "role": "user",
                         "content": [
@@ -888,8 +1216,17 @@ def organizer_by_state(state=0):
                     })
                     continue
                 else:
-                    print(f"this intention is not covered yet: {intention}")
+                    system_message = f"this intention is not covered yet: {intention}"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     teaching[-1] = {
                         "role": "user",
                         "content": [
@@ -902,10 +1239,14 @@ def organizer_by_state(state=0):
                     continue
 
         elif state_machine['state'] == 8:
+            latest_state = 8
             with open("state_machine_8.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_8.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
             learning_objectives = state_machine['learning_objectives'][heading].copy()
@@ -961,10 +1302,14 @@ def organizer_by_state(state=0):
             state_machine['state'] = 9
 
         elif state_machine['state'] == 9:
+            latest_state = 9
             with open("state_machine_9.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_9.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             quiz_sheet = prepare_quiz_sheet(state_machine['quizzes'])
             heading = f"{state_machine['main_topic']}</>{state_machine['sub_topic']}"
@@ -972,23 +1317,44 @@ def organizer_by_state(state=0):
             quiz_sheet = look_up + quiz_sheet
             with open('quiz_sheet.txt', 'w') as f:
                 f.write(quiz_sheet)
-            print("\nQUIZ SAVED TO quiz_sheet.txt\nPlease open it and complete the questions. When you save your changes on the same file, please type COMPLETED here")
+            system_message = "\nQUIZ SAVED TO quiz_sheet.txt\nPlease open it and complete the questions. When you save your changes on the same file, please type COMPLETED here"
+            conversation.append({
+                "role": "system",
+                "message": system_message
+            })
+            conversation.append({
+                "role": "quiz",
+                "message": quiz_sheet
+            })
+            print(system_message)
             user_response = input()
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             if user_response == "COMPLETED":
                 state_machine['state'] = 10
             else:
-                print("TODO intention will be detected")
+                # TODO intetion will be detected
                 state_machine['state'] = 10
                 # return
 
         elif state_machine['state'] == 10:
+            latest_state = 10
             with open("state_machine_10.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_10.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
 
             with open('quiz_sheet.txt', 'r') as f:
                 quiz_sheet = f.read()
+            conversation.append({
+                "role": "quiz_answer",
+                "message": quiz_sheet
+            })
             answers, pure_answers = get_answers(quiz_sheet)
             sessions = []
             failed_objectives = []
@@ -1006,7 +1372,8 @@ def organizer_by_state(state=0):
                         correct += 1
                 for learning_objective in state_machine['learning_objectives'][heading]:
                     if learning_objective['objective'] == quiz['learning_objective']['objective']:
-                        if correct / total >= 0.7:
+                        total = 10
+                        if total != 0 and correct / total >= 0.7:
                             known_objectives.append(learning_objective['objective'])
                             learning_objective['state'] = "known"
                         else:
@@ -1017,8 +1384,12 @@ def organizer_by_state(state=0):
                             learning_objective['pure_answer'] = quiz['pure_answer']
                         break
 
-                print(f"\n\nFOR THE QUIZ {i+1}:\n")
-                print(session[-1]['content'][0]['text'])
+                system_message = f"\n\nFOR THE QUIZ {i+1}:\n{session[-1]['content'][0]['text']}"
+                conversation.append({
+                    "role": "system",
+                    "message": system_message
+                })
+                print(system_message)
                 sessions.extend(session)
 
             bot_response = ""
@@ -1040,10 +1411,18 @@ def organizer_by_state(state=0):
             else:
                 bot_response += "Do you want to take another lesson?"
 
+            conversation.append({
+                "role": "system",
+                "message": bot_response
+            })
             print(bot_response)
             sessions[-1]['content'][0]['text'] += bot_response
 
             user_response = input()
+            conversation.append({
+                "role": "user",
+                "message": user_response
+            })
             sessions.append({
                 "role": "user",
                 "content": [
@@ -1054,36 +1433,58 @@ def organizer_by_state(state=0):
                 ]
             })
 
-            state_machine['state'] = 11
-            continue
-
             while True:
-                is_relevant = relevant_check(sessions)
-                print("is relevant:", is_relevant)
+                # is_relevant = relevant_check(sessions)
+                # print("is relevant:", is_relevant)
                 intention = detect_user_intention(sessions)
-                print("intention:", intention)
+                # print("intention:", intention)
 
                 # proceed
                 if intention == intentions[0]:
                     if len(failed_objectives) > 0:
-                        print("Let's study the lesson again.")
+                        system_message = "Let's study the lesson again."
+                        conversation.append({
+                            "role": "system",
+                            "message": system_message
+                        })
+                        print(system_message)
                         state_machine['state'] = 6
                     else:
-                        print("Let's look at the main topics again.")
+                        system_message = "Let's look at the main topics again."
+                        conversation.append({
+                            "role": "system",
+                            "message": system_message
+                        })
+                        print(system_message)
                         state_machine['state'] = 2
                     break
                 # quit
                 elif intention == intentions[1]:
-                    print("See you later!")
-                    return
+                    system_message = "See you later!"
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
+                    return conversation_id, conversation, state_machine, intention_history, latest_state
                 # go_to_main_topics
                 elif intention == intentions[2]:
-                    print("Let's look at the main topics again.")
+                    system_message = "Let's look at the main topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 2
                     break
                 # go_to_sub_topics
                 elif intention == intentions[3]:
-                    print("Let's look at the sub topics again.")
+                    system_message = "Let's look at the sub topics again."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 4
                     break
                 # exit_quiz
@@ -1098,8 +1499,16 @@ def organizer_by_state(state=0):
                             }
                         ]
                     })
+                    conversation.append({
+                        "role": "system",
+                        "message": bot_response
+                    })
                     print(bot_response)
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     sessions.append({
                         "role": "user",
                         "content": [
@@ -1122,7 +1531,15 @@ def organizer_by_state(state=0):
                             }
                         ]
                     })
+                    conversation.append({
+                        "role": "system",
+                        "message": bot_response
+                    })
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     sessions.append({
                         "role": "user",
                         "content": [
@@ -1135,12 +1552,21 @@ def organizer_by_state(state=0):
                     continue
                 # proceed to quiz
                 elif intention == intentions[6]:
-                    print("I understand you want to retake the quiz.")
+                    system_message = "I understand you want to retake the quiz."
+                    conversation.append({
+                        "role": "system",
+                        "message": system_message
+                    })
+                    print(system_message)
                     state_machine['state'] = 8
                     break
                 # question
                 elif intention == intentions[7]:
                     bot_response = "Before answering your question, I need to know how would like you continue?"
+                    conversation.append({
+                        "role": "system",
+                        "message": bot_response
+                    })
                     print(bot_response)
                     sessions.append({
                         "role": "assistant",
@@ -1152,6 +1578,10 @@ def organizer_by_state(state=0):
                         ]
                     })
                     user_response = input()
+                    conversation.append({
+                        "role": "user",
+                        "message": user_response
+                    })
                     sessions.append({
                         "role": "user",
                         "content": [
@@ -1163,26 +1593,50 @@ def organizer_by_state(state=0):
                     })
                     continue
 
-        elif state_machine['state'] == 11:
-            with open("state_machine_11.json", "w") as f:
-                json.dump(state_machine, f, indent=4)
-            with open("intention_history_11.json", "w") as f:
-                json.dump(intention_history, f, indent=4)
-            state_machine['state'] = 6
+        # elif state_machine['state'] == 11:
+        #     with open("state_machine_11.json", "w") as f:
+        #         state_machine['conversation'] = conversation
+        #         json.dump(state_machine, f, indent=4)
+        #     with open("intention_history_11.json", "w") as f:
+        #         json.dump(intention_history, f, indent=4)
+        #     with open(f"conversations/{conversation_id}.json", "w") as f:
+        #         json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
+        #     state_machine['state'] = 6
 
         else:
 
             with open("state_machine_latest.json", "w") as f:
+                state_machine['conversation'] = conversation
                 json.dump(state_machine, f, indent=4)
             with open("intention_history_latest.json", "w") as f:
                 json.dump(intention_history, f, indent=4)
             print(f"This state is not implemented yet: State {state_machine['state']}")
-            return
+            return conversation_id, conversation, state_machine, intention_history, latest_state
 
-        with open("state_machine_latest.json", "w") as f:
-            json.dump(state_machine, f, indent=4)
-        with open("intention_history_latest.json", "w") as f:
-            json.dump(intention_history, f, indent=4)
+        try:
+            with open("intention_history_latest.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+            state_machine['conversation'] = conversation
+            state_machine_data = jsonpickle.encode(state_machine, unpicklable=False)
+            with open("state_machine_latest.json", "w") as f:
+                f.write(state_machine_data)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
+        except:
+            with open(f'state_machine_{latest_state}.json', 'r') as f:
+                state_machine = json.load(f)
+                conversation = state_machine['conversation']
+            with open(f'intention_history_{latest_state}.json', 'r') as f:
+                intention_history = json.load(f)
+            with open("intention_history_latest.json", "w") as f:
+                json.dump(intention_history, f, indent=4)
+            state_machine['conversation'] = conversation
+            state_machine_data = jsonpickle.encode(state_machine, unpicklable=False)
+            with open("state_machine_latest.json", "w") as f:
+                f.write(state_machine_data)
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conversation, "state_machine": state_machine, "intention_history": intention_history}, f, indent=4)
+
 
 # intentions = ["proceed", "quit", "go_to_main_topics", "go_to_sub_topics", "exit_quiz", "exit_lesson", "proceed_to_quiz", "question"]
 
@@ -1553,7 +2007,7 @@ def answer_question(user_info, sub_topic, main_topic, learning_objective, teachi
     )
 
     teacher_text = message.content[0].text
-    teacher_text += "\nDo you have any further question or do you want me to continue to the lecture?"
+    teacher_text += "\nYou can ask questions related to the topics discussed or would you like me to continue?"
     teaching.append({
         "role": "assistant",
         "content": [
@@ -1645,8 +2099,8 @@ def learning_objectives_definition(user_info, sub_topic, main_topic):
     )
 
     objectives = []
-    for objective in re.findall(r"<objective>.*</objective>", message.content[0].text):
-        objectives.append({"objective": objective[11:-12], "state": "not_known", "lesson": []})
+    for objective in re.findall(r"<objective>.*?</objective>", message.content[0].text, re.DOTALL):
+        objectives.append({"objective": objective[11:-12].strip(), "state": "not_known", "lesson": []})
 
     return objectives
 
@@ -1671,5 +2125,16 @@ if __name__ == '__main__':
         # TODO genel olarak intention related kisimlar gozden gecirilecek
         # 10. state'ten 2 4 statelerine gecisi inceleyecegim
         client = anthropic.Anthropic(api_key=API_KEY)
-        organizer_by_state(state=11)
-    
+        conv_id, conv, sm, ih, ls = organizer_by_state(state=0)
+        try:
+            with open(f"conversations/{conv_id}.json", "w") as f:
+                json.dump({"conversation": conv, "state_machine": sm, "intention_history": ih}, f, indent=4)
+        except:
+            with open(f'state_machine_{ls}.json', 'r') as f:
+                sm = json.load(f)
+                conv = sm['conversation']
+            with open(f'intention_history_{ls}.json', 'r') as f:
+                ih = json.load(f)
+            sm['conversation'] = conv
+            with open(f"conversations/{conversation_id}.json", "w") as f:
+                json.dump({"conversation": conv, "state_machine": sm, "intention_history": ih}, f, indent=4)
