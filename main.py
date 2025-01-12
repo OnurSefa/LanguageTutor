@@ -2110,7 +2110,6 @@ if __name__ == '__main__':
     relevant_check_enabled = False
 
     os.makedirs('conversations', exist_ok=True)
-    os.makedirs('memory', exist_ok=True)
 
     API_KEY = os.getenv("API_KEY")
     if API_KEY is None:

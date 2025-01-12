@@ -1,12 +1,10 @@
 
-# Language Agent
+# LLM Language Tutor
 
-Amacimiz kullanici bir dil ogrenmek istedigini belirttiginde onun icin 
-yardimci olacak bir agent olusturmak. Temel seviyede dil ogrenimini saglamayi planliyoruz.
-Oncelikli olarak kullanici bir dil sececek. Sistem ona calismak isteyebilecegi ana konu
-basliklarini prompt edecek. Kullanici ana basligi sececek. Sistem ona hangi alt basligi
-calismak istedigini soracak. Kullanici bir tane sececek. Sistem secilen konu icin
-ayrintili olarak part part konuyu aciklayacak. Her partta kullanicinin sorusu olup olmadigini
-soracak ve varsa cevaplayacak. Tum partlar islendiginde ise quiz olusturacak anlatilan konularla
-alakali olarak. Kullanicinin cevap vermesini isteyecek. Kullanicin verdigi cevaplara gore dogru/yanlis
-lari belirtip aciklamalarda bulunacak.
+**How to:**
+* Create a python environment
+* Install required python packages listed in `requirements.txt`
+* Set environment variable `API_KEY=<claude_api_key>` or create a file named `api_key.txt` consisting only the claude api key
+* Run `main.py` file and follow the instructions
+* When the quiz is given, open the `quiz_sheet.txt` and save it after completing it. Prompt "COMPLETED"
+* The system doesn't shut down until you request to quit as a prompt.
